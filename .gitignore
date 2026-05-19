@@ -5,6 +5,9 @@ __pycache__/
 
 lora_model/
 lora_model_test/
+dpo_model/
+distill_model/
+model-pipeline-dpo-smoke/
 
 # C extensions
 *.so

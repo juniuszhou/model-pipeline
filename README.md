@@ -1,14 +1,15 @@
 # LLM Model Post-Tuning Pipeline
 
-This repository demonstrates a complete pipeline for post-training (fine-tuning) Large Language Models using LoRA (Low-Rank Adaptation) with Hugging Face Transformers and PEFT libraries.
+This repository demonstrates a complete pipeline for post-training Large Language Models using LoRA (Low-Rank Adaptation) and DPO (Direct Preference Optimization) with Hugging Face Transformers, PEFT, and TRL.
 
 ## Overview
 
 The project provides:
 1. Instruction-following dataset preparation
 2. LoRA-based fine-tuning of small language models (GPT-2)
-3. Model evaluation and comparison (base vs. fine-tuned)
-4. Simple agent demonstration showcasing instruction-following capabilities
+3. DPO preference optimization from chosen/rejected responses
+4. Model evaluation and comparison (base vs. fine-tuned)
+5. Simple agent demonstration showcasing instruction-following capabilities
 
 ## Repository Structure
 
@@ -17,6 +18,7 @@ model-pipeline/
 ├── data/
 │   └── sample_data.jsonl          # Instruction-following dataset
 ├── lora_model/                    # Saved LoRA adapter (after training)
+├── dpo_model/                     # Saved DPO LoRA adapter (after DPO training)
 ├── .venv/                         # Python virtual environment
 ├── .claude/                       # Claude Code settings
 ├── .gitignore                     # Git ignore rules
@@ -24,6 +26,7 @@ model-pipeline/
 ├__requirements.txt                # Python dependencies
 ├── README.md                      # This file
 ├── train_lora.py                  # LoRA fine-tuning script
+├── train_dpo.py                   # DPO preference optimization script
 └── evaluate_model.py              # Model evaluation, comparison & agent demo
 ```
 
@@ -54,7 +57,19 @@ python train_lora.py \
   --learning_rate 1e-4
 ```
 
-### 3. Evaluate and Compare Models
+### 3. Train a DPO Preference Model
+```bash
+source .venv/bin/activate
+python train_dpo.py \
+  --model_name gpt2 \
+  --output_dir ./dpo_model \
+  --num_epochs 1 \
+  --batch_size 1
+```
+
+`train_dpo.py` includes a tiny built-in preference dataset so the command runs immediately. For meaningful behavior, pass a larger JSONL file with `--dataset_path`.
+
+### 4. Evaluate and Compare Models
 ```bash
 source .venv/bin/activate
 python evaluate_model.py \
@@ -103,7 +118,23 @@ The `evaluate_model.py` script performs:
   - Mathematical reasoning
 - **Simple Agent Demo**: Demonstrates instruction-following capability with predefined questions
 
-### 4. Expected Outcomes
+### 4. DPO Preference Optimization
+
+The `train_dpo.py` script implements a minimal Direct Preference Optimization loop:
+- **Policy model**: The model being trained. In this repo it is the base model plus a LoRA adapter.
+- **Reference model**: A frozen copy of the original base model. DPO compares the policy against this model so training improves preferences without drifting too far from the starting model.
+- **Preference data**: Each example contains a prompt, a preferred answer (`chosen`), and a worse answer (`rejected`).
+- **DPO loss**: Increases the probability of the chosen answer relative to the rejected answer, while using the reference model as a regularizer.
+
+The built-in preference examples are intentionally tiny and only prove the pipeline works. A real DPO run needs hundreds or thousands of high-quality preference pairs.
+
+DPO JSONL format:
+```jsonl
+{"prompt": "### Instruction:\nExplain LoRA simply.\n\n### Response:\n", "chosen": "LoRA trains small adapter matrices while keeping the base model frozen.", "rejected": "LoRA means the model searches the internet."}
+{"instruction": "Answer carefully.", "input": "What is 12 * 8?", "chosen": "12 * 8 is 96.", "rejected": "12 * 8 is 86."}
+```
+
+### 5. Expected Outcomes
 
 After training, you should observe:
 - The fine-tuned model follows instruction formats better than the base model
@@ -119,6 +150,16 @@ Instead of fine-tuning all model parameters, LoRA:
 2. Injects trainable rank-decomposition matrices into each Transformer layer
 3. Significantly reduces computational cost and storage requirements
 4. Enables rapid experimentation with different adaptations
+
+### DPO (Direct Preference Optimization)
+DPO is a preference-tuning method used after supervised fine-tuning or instruction tuning. Instead of training a reward model and then running reinforcement learning, DPO directly optimizes the language model on paired responses:
+1. Start with a prompt and two answers: `chosen` and `rejected`
+2. Score both answers under the trainable policy model
+3. Score both answers under the frozen reference model
+4. Update the policy so the chosen answer becomes more likely than the rejected answer
+5. Use `beta` to control how strongly the policy is allowed to move away from the reference model
+
+In this project, DPO is combined with LoRA so only the adapter weights are updated. This keeps training lightweight and saves a small adapter in `dpo_model/`.
 
 ### Target Modules Selection
 For GPT-2 family models, we target `c_attn` (combined attention) which includes:
@@ -148,6 +189,11 @@ python train_lora.py --model_name microsoft/DialoGPT-small
 python train_lora.py --model_name distilgpt2
 ```
 
+The DPO script supports the same idea:
+```bash
+python train_dpo.py --model_name distilgpt2 --output_dir ./dpo_model
+```
+
 ### Adjusting LoRA Parameters
 Modify the LoRA configuration in `train_lora.py`:
 - Higher rank (r): More expressive but more parameters to train
@@ -159,6 +205,12 @@ Modify the LoRA configuration in `train_lora.py`:
 To use your own dataset, create a JSONL file with:
 ```jsonl
 {"instruction": "Your instruction here", "input": "Optional input context", "output": "Expected output"}
+```
+
+For DPO, create JSONL with either `prompt/chosen/rejected` or `instruction/input/chosen/rejected`:
+```jsonl
+{"prompt": "Your prompt here", "chosen": "Preferred response", "rejected": "Less helpful response"}
+{"instruction": "Your instruction here", "input": "Optional context", "chosen": "Preferred response", "rejected": "Less helpful response"}
 ```
 
 ## Troubleshooting
@@ -186,6 +238,7 @@ To use your own dataset, create a JSONL file with:
 
 ### Core Scripts
 - `train_lora.py`: Main LoRA fine-tuning implementation
+- `train_dpo.py`: DPO preference optimization with LoRA adapters
 - `evaluate_model.py`: Model loading, comparison, and agent demonstration
 
 ### Data
@@ -197,6 +250,8 @@ To use your own dataset, create a JSONL file with:
 - `lora_model/adapter_config.json`: LoRA configuration
 - `lora_model/tokenizer.*`: Tokenizer files
 - `lora_model/training_args.bin`: Training arguments used
+- `dpo_model/adapter_model.safetensors`: DPO-trained LoRA weights
+- `dpo_model/adapter_config.json`: DPO LoRA configuration
 
 ### Configuration
 - `requirements.txt`: Exact package versions for reproducibility
@@ -226,6 +281,7 @@ When comparing base vs. fine-tuned models:
 3. **Training Improvements**:
    - Increase number of epochs for better convergence
    - Tune LoRA hyperparameters (rank, alpha, dropout)
+   - Collect preference pairs and tune DPO `beta`
    - Experiment with different learning rate schedules
    - Add validation set for early stopping
 
@@ -244,8 +300,10 @@ When comparing base vs. fine-tuned models:
 ## References
 
 - LoRA Paper: https://arxiv.org/abs/2106.09685
+- DPO Paper: https://arxiv.org/abs/2305.18290
 - PEFT Library: https://github.com/huggingface/peft
 - Hugging Face Transformers: https://github.com/huggingface/transformers
+- TRL Library: https://github.com/huggingface/trl
 - Alpaca Dataset Format: https://github.com/tatsu-lab/stanford_alpaca
 
 ## License
