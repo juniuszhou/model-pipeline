@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+data/
+models/
+pipelines/
 lora_model/
 lora_model_test/
 dpo_model/
