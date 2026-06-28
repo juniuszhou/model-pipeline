@@ -1,12 +1,11 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from config import LLMTrainingConfig, get_config
+from loader import PretrainDataLoader, PretrainDataset, setup_seed
+from model import TransformerLM, save_model_safe
 from torch.optim import AdamW
 from transformers import AutoTokenizer
-
-from projects.config import LLMTrainingConfig, get_config
-from projects.loader import PretrainDataLoader, PretrainDataset, setup_seed
-from projects.model import TransformerLM, save_model_safe
 
 
 class Trainer:
@@ -32,6 +31,7 @@ class Trainer:
         step = 0
         data_iter = iter(self.dataloader)
 
+        # while step < 2:
         while step < self.config.max_steps:
             try:
                 batch = next(data_iter)

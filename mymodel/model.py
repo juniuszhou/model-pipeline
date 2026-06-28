@@ -75,11 +75,10 @@ import os
 
 import torch
 import torch.nn as nn
+from config import LLMTrainingConfig
 from jaxtyping import Bool, Float, Int, jaxtyped
 from safetensors.torch import load_file, save_file
 from torch import Tensor
-
-from projects.config import LLMTrainingConfig
 
 MODEL_PATH = "models/"
 logger = logging.getLogger(__name__)
@@ -283,9 +282,7 @@ class FeedForwardModel(nn.Module):
         self.down = nn.Linear(d_ff, d_model, bias=False)
         self.activation = nn.SiLU()
 
-    # 对于forward的计算，由于在整个MLP中，它只要求最后一个维度是d_model，所以它可以接收任意shape的输入，只要最后一个维度是d_model
-    # 这个是由broadcast机制决定的，Tensor可以灵活的进行shape的调整，来满足计算的需求。
-    # 但是对于代码的理解会有点不直观
+    # x just required to be (... d_model), for the most LLM models, it is (batch seq d_model)
     def forward(self, x: Float[Tensor, "batch seq d_model"]):
         gate: Float[Tensor, "batch seq d_ff"] = self.gate(x)
         activation: Float[Tensor, "batch seq d_ff"] = self.activation(gate)
@@ -310,50 +307,82 @@ class MoEFeedForwardModel(nn.Module):
             raise ValueError("top_k must be between 1 and moe_num")
         self.moe_num = moe_num
         self.top_k = top_k
+        # gate to different expert
         self.gate = nn.Linear(d_model, moe_num, bias=False)
+
+        # each expert is a feed forward network
         self.experts = nn.ModuleList(
             FeedForwardModel(d_model, d_ff) for _ in range(moe_num)
         )
 
     def forward(self, x: Float[Tensor, "batch seq d_model"]):
         batch_size, seq_len, d_model = x.shape
+
         router_logits: Float[Tensor, "batch seq moe_num"] = self.gate(x)
+        # each token go to which expert with probability
         router_probs: Float[Tensor, "batch seq moe_num"] = torch.softmax(
             router_logits, dim=-1
         )
 
-        # ... should be batch * seq
-        flat_x: Float[Tensor, "... d_model"] = x.reshape(-1, d_model)
-        output: Float[Tensor, "... d_model"] = torch.zeros_like(flat_x)
+        # 3 dim -> 2 dim, for each token, go to which expert
+        flat_x: Float[Tensor, "batch-seq d_model"] = x.reshape(-1, d_model)
+        output: Float[Tensor, "batch-seq d_model"] = torch.zeros_like(flat_x)
 
         if self.top_k == 1:
-            expert_indices: Int[Tensor, "..."] = router_probs.argmax(dim=-1).reshape(-1)
-            flat_probs: Float[Tensor, "... moe_num"] = router_probs.reshape(
+            # which expert with max probability, then each token go to which expert. the value is the expert index
+            expert_indices: Int[Tensor, "batch seq"] = router_probs.argmax(dim=-1)
+
+            flat_probs: Float[Tensor, "batch-seq moe_num"] = router_probs.reshape(
                 -1, self.moe_num
             )
             for expert_id, expert in enumerate(self.experts):
-                token_mask: Bool[Tensor, "..."] = expert_indices == expert_id
+                # 2 dim -> 1 dim, then we can use it to mask the input flat x
+                token_mask: Bool[Tensor, "batch-seq"] = (
+                    expert_indices == expert_id
+                ).reshape(-1)
+
                 if not token_mask.any():
                     continue
                 # x 作为输入就会根据mask，来选择每个token是否要经过这个expert来计算。这样x会更加的稀疏
-                x_to_expert: Float[Tensor, "... d_model"] = flat_x[token_mask]
-                expert_out: Float[Tensor, "... d_model"] = expert(x_to_expert)
-                weights = flat_probs[token_mask, expert_id].unsqueeze(-1)
-                # 把输出也进行加权，这样就得到了每个token的输出
+                x_to_expert: Float[Tensor, "batch-seq d_model"] = flat_x[token_mask]
+
+                # call normal feed forward model with the flat x
+                expert_out: Float[Tensor, "batch-seq d_model"] = expert(
+                    x_to_expert
+                )  # batch-seq d_model
+
+                # get the second dim according to the expert id, and the first dim according to the token mask
+                weights: Float[Tensor, "batch-seq"] = flat_probs[token_mask, expert_id]
+
+                # 1 dim -> 2 dim, then we can use it to multiply the expert output
+                weights: Float[Tensor, "batch-seq 1"] = weights.unsqueeze(-1)
+
                 output[token_mask] = expert_out * weights
         else:
+            topk_probs: Float[Tensor, "batch seq top_k"]
+            topk_indices: Int[Tensor, "batch seq top_k"]
             topk_probs, topk_indices = torch.topk(router_probs, self.top_k, dim=-1)
             topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
-            flat_topk_probs = topk_probs.reshape(-1, self.top_k)
-            flat_topk_indices = topk_indices.reshape(-1, self.top_k)
-            # 对于每个topk，我们都要计算每个expert的输出，然后进行加权
+            flat_topk_probs: Float[Tensor, "batch-seq top_k"] = topk_probs.reshape(
+                -1, self.top_k
+            )
+            flat_topk_indices: Int[Tensor, "batch-seq top_k"] = topk_indices.reshape(
+                -1, self.top_k
+            )
+            # for each topk, we need to calculate the output of each expert, then add them together
             for k in range(self.top_k):
                 for expert_id, expert in enumerate(self.experts):
-                    token_mask = flat_topk_indices[:, k] == expert_id
+                    token_mask: Bool[Tensor, "batch-seq"] = (
+                        flat_topk_indices[:, k] == expert_id
+                    )
                     if not token_mask.any():
                         continue
-                    expert_out = expert(flat_x[token_mask])
-                    weights = flat_topk_probs[token_mask, k].unsqueeze(-1)
+                    expert_out: Float[Tensor, "batch-seq d_model"] = expert(
+                        flat_x[token_mask]
+                    )
+                    weights: Float[Tensor, "batch-seq 1"] = flat_topk_probs[
+                        token_mask, k
+                    ].unsqueeze(-1)
                     output[token_mask] += expert_out * weights
 
         return output.reshape(batch_size, seq_len, d_model)
@@ -366,7 +395,10 @@ class TransformerBlock(nn.Module):
         d_model: int,
         d_ff: int,
         rope_theta: float,
+        use_moe: bool,
         dropout: float = 0.1,
+        moe_num: int = 4,
+        top_k: int = 1,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -375,7 +407,11 @@ class TransformerBlock(nn.Module):
         self.rope_theta = rope_theta
 
         self.attention = DecoderModel(num_heads, d_model, rope_theta)
-        self.feed_forward = FeedForwardModel(d_model, d_ff)
+        if use_moe:
+            self.feed_forward = MoEFeedForwardModel(d_model, d_ff, moe_num, top_k)
+        else:
+            self.feed_forward = FeedForwardModel(d_model, d_ff)
+
         self.attention_dropout = nn.Dropout(dropout)
         self.feed_forward_dropout = nn.Dropout(dropout)
         self.norm1 = nn.RMSNorm(d_model)
@@ -399,15 +435,26 @@ class TransformerLM(nn.Module):
         self.vocab_size = config.vocab_size
         self.context_length = config.context_length
         self.d_model = config.hidden_size
+        self.use_moe = config.use_moe
+        self.moe_num = config.moe_num
         self.num_layers = config.num_hidden_layers
         self.num_heads = config.num_heads
         self.d_ff = config.d_ff
         self.rope_theta = config.rope_theta
+        self.top_k = config.top_k
+        self.dropout = config.dropout
 
         self.embed = nn.Embedding(self.vocab_size, self.d_model)
         self.layers = nn.ModuleList([
             TransformerBlock(
-                self.num_heads, self.d_model, self.d_ff, self.rope_theta, self.moe
+                self.num_heads,
+                self.d_model,
+                self.d_ff,
+                self.rope_theta,
+                self.use_moe,
+                self.dropout,
+                self.moe_num,
+                self.top_k,
             )
             for _ in range(self.num_layers)
         ])
