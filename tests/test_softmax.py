@@ -1,6 +1,6 @@
 import torch
 
-from components.softmax import softmax
+from components.activations import softmax
 
 
 def test_softmax_basic_1d():

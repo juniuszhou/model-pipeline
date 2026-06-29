@@ -1,7 +1,10 @@
 import torch
 
-x = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-y = x.max(dim=-1, keepdim=True).values
+x = torch.arange(24).reshape(6, 4).float()
+print(x.shape)
 
-z = x - y
-print(z.shape)
+print(x.unsqueeze(-1).shape)
+
+# y = torch.tensor([[True, False, True], [False, True, False]])
+
+# print(x[y])

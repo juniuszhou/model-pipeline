@@ -80,6 +80,8 @@ def main() -> None:
     setup_seed(42)
     config = get_config()
 
+    print("config: ", config.use_moe)
+
     if config.use_moe:
         print("Warning: use_moe is not implemented yet; training dense FFN.")
 

@@ -26,4 +26,4 @@ pythonpath = ["."]
 testpaths = ["tests", "mymodel/tests"]
 
 [tool.ruff.lint]
-ignore = ["F722"]
+ignore = ["F722", "F821"]

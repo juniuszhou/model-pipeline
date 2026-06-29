@@ -25,7 +25,7 @@ class LLMTrainingConfig(PretrainedConfig):
 
     def __init__(
         self,
-        hidden_size: int = 256,
+        d_model: int = 256,
         num_hidden_layers: int = 4,
         num_heads: int = 8,
         d_ff: int = 1024,
@@ -42,12 +42,13 @@ class LLMTrainingConfig(PretrainedConfig):
         tokenizer_name: str = "bert-base-chinese",
         moe_num: int = 4,
         top_k: int = 1,
+        dropout: float = 0.1,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        if hidden_size % num_heads != 0:
-            raise ValueError("hidden_size must be divisible by num_heads")
-        self.hidden_size = hidden_size
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.d_model = d_model
         self.num_hidden_layers = num_hidden_layers
         self.num_heads = num_heads
         self.d_ff = d_ff
@@ -64,15 +65,12 @@ class LLMTrainingConfig(PretrainedConfig):
         self.tokenizer_name = tokenizer_name
         self.moe_num = moe_num
         self.top_k = top_k
-
-    @property
-    def d_model(self) -> int:
-        return self.hidden_size
+        self.dropout = dropout
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train TransformerLM")
-    parser.add_argument("--hidden_size", type=int, default=256)
+    parser.add_argument("--d_model", type=int, default=256)
     parser.add_argument("--num_hidden_layers", type=int, default=4)
     parser.add_argument("--num_heads", type=int, default=8)
     parser.add_argument("--d_ff", type=int, default=1024)
@@ -93,13 +91,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def get_config() -> LLMTrainingConfig:
-    return LLMTrainingConfig(**vars(parse_args()))
+    args = parse_args()
+
+    print("args: ", args)
+
+    print("args: ", args.use_moe)
+    return LLMTrainingConfig(**vars(args))
 
 
 class BlockConfig:
     def __init__(
         self,
-        hidden_size: int = 256,
+        d_model: int = 256,
         num_hidden_layers: int = 4,
         num_heads: int = 8,
         d_ff: int = 1024,
@@ -116,12 +119,11 @@ class BlockConfig:
         tokenizer_name: str = "bert-base-chinese",
         moe_num: int = 4,
         top_k: int = 1,
-        **kwargs,
+        dropout: float = 0.1,
     ):
-        super().__init__(**kwargs)
-        if hidden_size % num_heads != 0:
-            raise ValueError("hidden_size must be divisible by num_heads")
-        self.hidden_size = hidden_size
+        if d_model % num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.d_model = d_model
         self.num_hidden_layers = num_hidden_layers
         self.num_heads = num_heads
         self.d_ff = d_ff
@@ -138,10 +140,11 @@ class BlockConfig:
         self.moe_num = moe_num
         self.top_k = top_k
         self.tokenizer_name = tokenizer_name
+        self.dropout = dropout
 
     def from_llm_config(self, llm_config: LLMTrainingConfig) -> BlockConfig:
         return BlockConfig(
-            hidden_size=llm_config.hidden_size,
+            d_model=llm_config.d_model,
             num_hidden_layers=llm_config.num_hidden_layers,
             num_heads=llm_config.num_heads,
             d_ff=llm_config.d_ff,

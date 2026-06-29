@@ -5,7 +5,7 @@ set -euo pipefail
 
 # Sized for ~6GB GPU: large models OOM mainly on logits (batch * seq * vocab).
 uv run trainer.py \
-    --hidden_size 256 \
+    --d_model 256 \
     --num_hidden_layers 4 \
     --num_heads 8 \
     --d_ff 1024 \
@@ -19,5 +19,5 @@ uv run trainer.py \
     --data_path data/train.jsonl \
     --tokenizer_name bert-base-chinese \
     --moe_num 4 \
-    --top_k 2 \
-    --use_moe True
+    --top_k 2 
+   

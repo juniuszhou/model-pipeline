@@ -75,7 +75,7 @@ import os
 
 import torch
 import torch.nn as nn
-from config import LLMTrainingConfig
+from config import BlockConfig, LLMTrainingConfig
 from jaxtyping import Bool, Float, Int, jaxtyped
 from safetensors.torch import load_file, save_file
 from torch import Tensor
@@ -89,7 +89,7 @@ def _model_config_dict(model: TransformerLM) -> dict:
         "model_type": "transformer_lm",
         "vocab_size": model.vocab_size,
         "context_length": model.context_length,
-        "hidden_size": model.d_model,
+        "d_model": model.d_model,
         "num_hidden_layers": model.num_layers,
         "num_heads": model.num_heads,
         "d_ff": model.d_ff,
@@ -101,7 +101,7 @@ def _config_from_checkpoint_dict(config: dict) -> LLMTrainingConfig:
     return LLMTrainingConfig(
         vocab_size=config["vocab_size"],
         context_length=config["context_length"],
-        hidden_size=config.get("hidden_size", config.get("d_model")),
+        d_model=config.get("d_model", config.get("d_model")),
         num_hidden_layers=config.get("num_hidden_layers", config.get("num_layers")),
         num_heads=config["num_heads"],
         d_ff=config["d_ff"],
@@ -121,6 +121,9 @@ def save_model_safe(model: TransformerLM, name: str = "checkpoint") -> None:
     weights_path = os.path.join(output_dir, "model.safetensors")
     config_path = os.path.join(output_dir, "config.json")
 
+    for name, param in model.state_dict().items():
+        print(name, param.shape)
+
     save_file(model.state_dict(), weights_path)
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(_model_config_dict(model), handle, indent=2)
@@ -128,7 +131,7 @@ def save_model_safe(model: TransformerLM, name: str = "checkpoint") -> None:
 
 
 def load_model_safe(
-    name: str = "checkpoint",
+    name: str = "latest",
     device: str | torch.device = "cpu",
 ) -> TransformerLM:
     output_dir = os.path.join(MODEL_PATH, name)
@@ -166,10 +169,10 @@ def save_model(model: TransformerLM, name: str = "model.pth") -> None:
     logger.info("Model saved to %s", path)
 
 
-def load_model(model: TransformerLM, name: str = "model.pth") -> TransformerLM:
-    path = os.path.join(MODEL_PATH, name)
+def load_model(model: TransformerLM, name: str = "latest") -> TransformerLM:
+    path = os.path.join(MODEL_PATH, name, "model.safetensors")
     # load the weights only
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    state_dict = torch.load(path, map_location="cpu", weights_only=False)
     # hyperparameters already in the model object
     # we must save hyperparameters before, if we need create TransformerLM object from saved data
     model.load_state_dict(state_dict)
@@ -391,31 +394,30 @@ class MoEFeedForwardModel(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(
         self,
-        num_heads: int,
-        d_model: int,
-        d_ff: int,
-        rope_theta: float,
-        use_moe: bool,
-        dropout: float = 0.1,
-        moe_num: int = 4,
-        top_k: int = 1,
+        config: BlockConfig,
     ):
         super().__init__()
-        self.num_heads = num_heads
-        self.d_model = d_model
-        self.d_ff = d_ff
-        self.rope_theta = rope_theta
+        self.num_heads = config.num_heads
+        self.d_model = config.d_model
+        self.d_ff = config.d_ff
+        self.rope_theta = config.rope_theta
+        self.use_moe = config.use_moe
+        self.moe_num = config.moe_num
+        self.top_k = config.top_k
+        self.dropout = config.dropout
 
-        self.attention = DecoderModel(num_heads, d_model, rope_theta)
-        if use_moe:
-            self.feed_forward = MoEFeedForwardModel(d_model, d_ff, moe_num, top_k)
+        self.attention = DecoderModel(self.num_heads, self.d_model, self.rope_theta)
+        if config.use_moe:
+            self.feed_forward = MoEFeedForwardModel(
+                self.d_model, self.d_ff, self.moe_num, self.top_k
+            )
         else:
-            self.feed_forward = FeedForwardModel(d_model, d_ff)
+            self.feed_forward = FeedForwardModel(self.d_model, self.d_ff)
 
-        self.attention_dropout = nn.Dropout(dropout)
-        self.feed_forward_dropout = nn.Dropout(dropout)
-        self.norm1 = nn.RMSNorm(d_model)
-        self.norm2 = nn.RMSNorm(d_model)
+        self.attention_dropout = nn.Dropout(self.dropout)
+        self.feed_forward_dropout = nn.Dropout(self.dropout)
+        self.norm1 = nn.RMSNorm(self.d_model)
+        self.norm2 = nn.RMSNorm(self.d_model)
 
     def forward(self, x: Float[Tensor, "batch seq d_model"]):
         # norm + attention + residual
@@ -434,7 +436,7 @@ class TransformerLM(nn.Module):
         super().__init__()
         self.vocab_size = config.vocab_size
         self.context_length = config.context_length
-        self.d_model = config.hidden_size
+        self.d_model = config.d_model
         self.use_moe = config.use_moe
         self.moe_num = config.moe_num
         self.num_layers = config.num_hidden_layers
@@ -444,19 +446,22 @@ class TransformerLM(nn.Module):
         self.top_k = config.top_k
         self.dropout = config.dropout
 
+        block_config = BlockConfig(
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            d_ff=self.d_ff,
+            rope_theta=self.rope_theta,
+            use_moe=self.use_moe,
+            moe_num=self.moe_num,
+            top_k=self.top_k,
+            dropout=self.dropout,
+        )
+
+        print("use_moe: ", self.use_moe)
+
         self.embed = nn.Embedding(self.vocab_size, self.d_model)
         self.layers = nn.ModuleList([
-            TransformerBlock(
-                self.num_heads,
-                self.d_model,
-                self.d_ff,
-                self.rope_theta,
-                self.use_moe,
-                self.dropout,
-                self.moe_num,
-                self.top_k,
-            )
-            for _ in range(self.num_layers)
+            TransformerBlock(block_config) for _ in range(self.num_layers)
         ])
         self.norm = nn.RMSNorm(self.d_model)
         self.lm_head = nn.Linear(self.d_model, self.vocab_size, bias=False)
@@ -478,12 +483,12 @@ class TransformerLM(nn.Module):
             x = layer(x)
 
         nx: Float[Tensor, "batch seq d_model"] = self.norm(x)
-
         logits: Float[Tensor, "batch seq vocab_size"] = self.lm_head(nx)
 
         return logits
 
     @torch.inference_mode()
+    # the input must be (batch seq), because the model is trained on (batch seq)
     def generate(self, input_ids: Int[Tensor, "batch seq"], max_new_tokens: int):
         for _ in range(max_new_tokens):
             logits = self(input_ids)
