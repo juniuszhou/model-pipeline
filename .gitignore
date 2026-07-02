@@ -12,6 +12,8 @@ dpo_model/
 distill_model/
 model-pipeline-dpo-smoke/
 
+components/tmp/
+
 # C extensions
 *.so
 
