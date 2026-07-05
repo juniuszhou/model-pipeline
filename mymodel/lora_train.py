@@ -2,8 +2,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from config import LLMTrainingConfig, get_config
-from loader import PretrainDataLoader, PretrainDataset, setup_seed
-from model import TransformerLM, save_model_safe
+from loader import PretrainDataLoader, SFTDataset, setup_seed
+from lora import apply_lora
+from model import load_model_safe
 from torch.optim import AdamW
 from transformers import AutoTokenizer
 
@@ -53,7 +54,10 @@ class Trainer:
                 shift_labels.view(-1),
             )
             if not torch.isfinite(loss):
-                raise RuntimeError(f"Non-finite loss at step {step}")
+                raise RuntimeError(
+                    f"Non-finite loss at step {step} "
+                    f"(all {shift_labels.numel()} labels may be -100/ignored)"
+                )
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -73,7 +77,7 @@ class Trainer:
                 "Warning: final loss did not decrease versus step 1; "
                 "try more steps or adjust learning rate."
             )
-        save_model_safe(self.model, "latest")
+        # save_model_safe(self.model, name="latest")
 
 
 def main() -> None:
@@ -88,7 +92,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     config.vocab_size = tokenizer.vocab_size
 
-    dataset = PretrainDataset(
+    dataset = SFTDataset(
         config.data_path,
         tokenizer,
         max_length=config.context_length,
@@ -100,7 +104,9 @@ def main() -> None:
         num_workers=config.load_workers,
     )
 
-    model = TransformerLM(config)
+    model = load_model_safe("latest")
+    apply_lora(model)
+
     param_count = sum(p.numel() for p in model.parameters())
     print(f"total parameters: {param_count:,}")
     print(
@@ -110,7 +116,6 @@ def main() -> None:
 
     trainer = Trainer(model, dataloader, config)
     trainer.train()
-    tokenizer.save_pretrained("models")
 
 
 if __name__ == "__main__":

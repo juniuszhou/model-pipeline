@@ -121,9 +121,6 @@ def save_model_safe(model: TransformerLM, name: str = "checkpoint") -> None:
     weights_path = os.path.join(output_dir, "model.safetensors")
     config_path = os.path.join(output_dir, "config.json")
 
-    for name, param in model.state_dict().items():
-        print(name, param.shape)
-
     save_file(model.state_dict(), weights_path)
     with open(config_path, "w", encoding="utf-8") as handle:
         json.dump(_model_config_dict(model), handle, indent=2)
@@ -170,7 +167,7 @@ def save_model(model: TransformerLM, name: str = "model.pth") -> None:
 
 
 def load_model(model: TransformerLM, name: str = "latest") -> TransformerLM:
-    path = os.path.join(MODEL_PATH, name, "model.safetensors")
+    path = os.path.join(MODEL_PATH, name)
     # load the weights only
     state_dict = torch.load(path, map_location="cpu", weights_only=False)
     # hyperparameters already in the model object
@@ -346,7 +343,7 @@ class MoEFeedForwardModel(nn.Module):
 
                 if not token_mask.any():
                     continue
-                # x 作为输入就会根据mask，来选择每个token是否要经过这个expert来计算。这样x会更加的稀疏
+                # x as input to expert, should be sparse only part filter by gate to be invoked in expert computation.
                 x_to_expert: Float[Tensor, "batch-seq d_model"] = flat_x[token_mask]
 
                 # call normal feed forward model with the flat x
@@ -392,6 +389,20 @@ class MoEFeedForwardModel(nn.Module):
 
 
 class TransformerBlock(nn.Module):
+    """
+    Transformer block with attention and feed forward.
+    step by step:
+    1. norm x -> x
+    2. attention x -> x
+    3. dropout x -> x
+    4. residual input + x * learning_rate -> x
+    5. norm x -> x
+    6. feed forward x -> x
+    7. dropout x -> x
+    8. residual x + x * learning_rate -> x
+    return the output x
+    """
+
     def __init__(
         self,
         config: BlockConfig,
@@ -405,6 +416,7 @@ class TransformerBlock(nn.Module):
         self.moe_num = config.moe_num
         self.top_k = config.top_k
         self.dropout = config.dropout
+        self.learning_rate = config.learning_rate
 
         self.attention = DecoderModel(self.num_heads, self.d_model, self.rope_theta)
         if config.use_moe:
@@ -419,15 +431,19 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.RMSNorm(self.d_model)
         self.norm2 = nn.RMSNorm(self.d_model)
 
-    def forward(self, x: Float[Tensor, "batch seq d_model"]):
+    def forward(
+        self, x: Float[Tensor, "batch seq d_model"], learning_rate: float | None = None
+    ):
+        if learning_rate is None:
+            learning_rate = self.learning_rate
         # norm + attention + residual
         attn_output = self.attention(self.norm1(x))
         attn_output = self.attention_dropout(attn_output)
-        x = x + attn_output
+        x = x + attn_output * self.learning_rate
         # norm + feed forward + residual
         ff_output = self.feed_forward(self.norm2(x))
         ff_output = self.feed_forward_dropout(ff_output)
-        x = x + ff_output
+        x = x + ff_output * self.learning_rate
         return x
 
 
@@ -476,11 +492,14 @@ class TransformerLM(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-    def forward(self, input_ids: Int[Tensor, "batch seq"]):
+    # learning_rate is used to control the learning rate of the model, could be adaptive in different phases
+    def forward(
+        self, input_ids: Int[Tensor, "batch seq"], learning_rate: float | None = None
+    ):
         x: Float[Tensor, "batch seq d_model"] = self.embed(input_ids)
 
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, learning_rate)
 
         nx: Float[Tensor, "batch seq d_model"] = self.norm(x)
         logits: Float[Tensor, "batch seq vocab_size"] = self.lm_head(nx)

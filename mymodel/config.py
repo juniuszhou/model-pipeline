@@ -21,6 +21,8 @@ def _parse_dtype(dtype: torch.dtype | str) -> torch.dtype:
 
 
 class LLMTrainingConfig(PretrainedConfig):
+    # it is needed for serialization/deserialization
+    # required by HuggingFace PreTrainedConfig base class
     model_type = "llm-training"
 
     def __init__(
