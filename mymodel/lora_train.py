@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from config import LLMTrainingConfig, get_config
 from loader import PretrainDataLoader, SFTDataset, setup_seed
-from lora import apply_lora
+from lora import apply_lora, save_lora
 from model import load_model_safe
 from torch.optim import AdamW
 from transformers import AutoTokenizer
@@ -19,11 +19,14 @@ class Trainer:
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
+        # fixed learning rate
         self.optimizer = AdamW(
             self.model.parameters(),
             lr=config.learning_rate,
         )
         self.dataloader = dataloader
+        # ignore the loss of the data with label -100
+        # -100 is default value, we can set it or not.
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
     def train(self) -> None:
@@ -65,6 +68,8 @@ class Trainer:
 
             loss_value = loss.item()
             losses.append(loss_value)
+            # the loss in lora usually is small, the model just remember the training data.
+            # the total parameters of the model is about 20M, it is overfitting.
             if step == 1 or step % 50 == 0 or step == self.config.max_steps:
                 print(
                     f"step {step}/{self.config.max_steps} "
@@ -83,12 +88,6 @@ class Trainer:
 def main() -> None:
     setup_seed(42)
     config = get_config()
-
-    print("config: ", config.use_moe)
-
-    if config.use_moe:
-        print("Warning: use_moe is not implemented yet; training dense FFN.")
-
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     config.vocab_size = tokenizer.vocab_size
 
@@ -104,6 +103,7 @@ def main() -> None:
         num_workers=config.load_workers,
     )
 
+    # load the model from the latest saved by run train.py
     model = load_model_safe("latest")
     apply_lora(model)
 
@@ -116,6 +116,7 @@ def main() -> None:
 
     trainer = Trainer(model, dataloader, config)
     trainer.train()
+    save_lora(model, "lora.pth")
 
 
 if __name__ == "__main__":

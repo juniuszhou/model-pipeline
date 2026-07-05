@@ -101,56 +101,43 @@ def get_config() -> LLMTrainingConfig:
     return LLMTrainingConfig(**vars(args))
 
 
-class BlockConfig:
-    def __init__(
-        self,
-        d_model: int = 256,
-        num_hidden_layers: int = 4,
-        num_heads: int = 8,
-        d_ff: int = 1024,
-        rope_theta: float = 10000.0,
-        use_moe: bool = False,
-        dtype: torch.dtype | str = "bfloat16",
-        vocab_size: int = 21128,
-        context_length: int = 128,
-        batch_size: int = 4,
-        max_steps: int = 500,
-        learning_rate: float = 3e-4,
-        load_workers: int = 0,
-        data_path: str = "data/train.jsonl",
-        tokenizer_name: str = "bert-base-chinese",
-        moe_num: int = 4,
-        top_k: int = 1,
-        dropout: float = 0.1,
-    ):
-        if d_model % num_heads != 0:
-            raise ValueError("d_model must be divisible by num_heads")
-        self.d_model = d_model
-        self.num_hidden_layers = num_hidden_layers
-        self.num_heads = num_heads
-        self.d_ff = d_ff
-        self.rope_theta = rope_theta
-        self.use_moe = use_moe
-        self.dtype = _parse_dtype(dtype)
-        self.vocab_size = vocab_size
-        self.context_length = context_length
-        self.batch_size = batch_size
-        self.max_steps = max_steps
-        self.learning_rate = learning_rate
-        self.load_workers = load_workers
-        self.data_path = data_path
-        self.moe_num = moe_num
-        self.top_k = top_k
-        self.tokenizer_name = tokenizer_name
-        self.dropout = dropout
+class TransformerModelConfig:
+    def __init__(self, config: LLMTrainingConfig):
+        self.d_model = config.d_model
+        self.num_hidden_layers = config.num_hidden_layers
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.rope_theta = config.rope_theta
+        self.use_moe = config.use_moe
+        self.moe_num = config.moe_num
+        self.top_k = config.top_k
+        self.dropout = config.dropout
+        self.vocab_size = config.vocab_size
+        self.context_length = config.context_length
+        self.batch_size = config.batch_size
+        self.max_steps = config.max_steps
+        self.learning_rate = config.learning_rate
+        self.load_workers = config.load_workers
+        self.dtype = config.dtype
 
-    def from_llm_config(self, llm_config: LLMTrainingConfig) -> BlockConfig:
-        return BlockConfig(
-            d_model=llm_config.d_model,
-            num_hidden_layers=llm_config.num_hidden_layers,
-            num_heads=llm_config.num_heads,
-            d_ff=llm_config.d_ff,
-            rope_theta=llm_config.rope_theta,
-            use_moe=llm_config.use_moe,
-            dtype=llm_config.dtype,
-        )
+
+class BlockConfig:
+    def __init__(self, config: TransformerModelConfig):
+        if config.d_model % config.num_heads != 0:
+            raise ValueError("d_model must be divisible by num_heads")
+        self.d_model = config.d_model
+        self.num_hidden_layers = config.num_hidden_layers
+        self.num_heads = config.num_heads
+        self.d_ff = config.d_ff
+        self.rope_theta = config.rope_theta
+        self.use_moe = config.use_moe
+        self.dtype = config.dtype
+        self.vocab_size = config.vocab_size
+        self.context_length = config.context_length
+        self.batch_size = config.batch_size
+        self.max_steps = config.max_steps
+        self.learning_rate = config.learning_rate
+        self.load_workers = config.load_workers
+        self.moe_num = config.moe_num
+        self.top_k = config.top_k
+        self.dropout = config.dropout

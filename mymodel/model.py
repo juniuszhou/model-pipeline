@@ -75,7 +75,7 @@ import os
 
 import torch
 import torch.nn as nn
-from config import BlockConfig, LLMTrainingConfig
+from config import BlockConfig, LLMTrainingConfig, TransformerModelConfig
 from jaxtyping import Bool, Float, Int, jaxtyped
 from safetensors.torch import load_file, save_file
 from torch import Tensor
@@ -87,13 +87,13 @@ logger = logging.getLogger(__name__)
 def _model_config_dict(model: TransformerLM) -> dict:
     return {
         "model_type": "transformer_lm",
-        "vocab_size": model.vocab_size,
-        "context_length": model.context_length,
-        "d_model": model.d_model,
-        "num_hidden_layers": model.num_layers,
-        "num_heads": model.num_heads,
-        "d_ff": model.d_ff,
-        "rope_theta": model.rope_theta,
+        "vocab_size": model.config.vocab_size,
+        "context_length": model.config.context_length,
+        "d_model": model.config.d_model,
+        "num_hidden_layers": model.config.num_hidden_layers,
+        "num_heads": model.config.num_heads,
+        "d_ff": model.config.d_ff,
+        "rope_theta": model.config.rope_theta,
     }
 
 
@@ -141,7 +141,8 @@ def load_model_safe(
 
     model = TransformerLM(_config_from_checkpoint_dict(config))
     state_dict = load_file(weights_path, device=str(device))
-    model.load_state_dict(state_dict)
+    # strict=False: tolerate extra keys from old checkpoints (e.g. removed unused norm)
+    model.load_state_dict(state_dict, strict=False)
     return model
 
 
@@ -447,40 +448,44 @@ class TransformerBlock(nn.Module):
         return x
 
 
+class TransformerModel(nn.Module):
+    """Transformer backbone: embedding → layers → norm."""
+
+    def __init__(self, config: TransformerModelConfig):
+        super().__init__()
+        self.config = config
+
+        block_config = BlockConfig(config)
+
+        self.layers = nn.ModuleList([
+            TransformerBlock(block_config) for _ in range(self.config.num_hidden_layers)
+        ])
+        self.norm = nn.RMSNorm(self.config.d_model)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch seq d_model"],
+        learning_rate: float | None = None,
+    ):
+        for layer in self.layers:
+            x = layer(x, learning_rate)
+        return self.norm(x)
+
+
 class TransformerLM(nn.Module):
+    """Full language model: embedding → transformer → lm_head."""
+
     def __init__(self, config: LLMTrainingConfig):
         super().__init__()
-        self.vocab_size = config.vocab_size
-        self.context_length = config.context_length
-        self.d_model = config.d_model
-        self.use_moe = config.use_moe
-        self.moe_num = config.moe_num
-        self.num_layers = config.num_hidden_layers
-        self.num_heads = config.num_heads
-        self.d_ff = config.d_ff
-        self.rope_theta = config.rope_theta
-        self.top_k = config.top_k
-        self.dropout = config.dropout
+        self.config = config
 
-        block_config = BlockConfig(
-            d_model=self.d_model,
-            num_heads=self.num_heads,
-            d_ff=self.d_ff,
-            rope_theta=self.rope_theta,
-            use_moe=self.use_moe,
-            moe_num=self.moe_num,
-            top_k=self.top_k,
-            dropout=self.dropout,
+        model_config = TransformerModelConfig(config)
+        self.model = TransformerModel(model_config)
+
+        self.embed = nn.Embedding(self.config.vocab_size, self.config.d_model)
+        self.lm_head = nn.Linear(
+            self.config.d_model, self.config.vocab_size, bias=False
         )
-
-        print("use_moe: ", self.use_moe)
-
-        self.embed = nn.Embedding(self.vocab_size, self.d_model)
-        self.layers = nn.ModuleList([
-            TransformerBlock(block_config) for _ in range(self.num_layers)
-        ])
-        self.norm = nn.RMSNorm(self.d_model)
-        self.lm_head = nn.Linear(self.d_model, self.vocab_size, bias=False)
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -498,11 +503,8 @@ class TransformerLM(nn.Module):
     ):
         x: Float[Tensor, "batch seq d_model"] = self.embed(input_ids)
 
-        for layer in self.layers:
-            x = layer(x, learning_rate)
-
-        nx: Float[Tensor, "batch seq d_model"] = self.norm(x)
-        logits: Float[Tensor, "batch seq vocab_size"] = self.lm_head(nx)
+        hidden_state: Float[Tensor, "batch seq d_model"] = self.model(x, learning_rate)
+        logits: Float[Tensor, "batch seq vocab_size"] = self.lm_head(hidden_state)
 
         return logits
 

@@ -27,7 +27,7 @@ def setup_seed(seed: int):
 
 
 def post_processing_chat(prompt_content, empty_think_ratio=0.2):
-    # 以80%概率移除空思考标签
+    # remove empty think tags with probability
     if (
         "<think>\n\n</think>\n\n" in prompt_content
         and random.random() > empty_think_ratio
@@ -36,24 +36,22 @@ def post_processing_chat(prompt_content, empty_think_ratio=0.2):
     return prompt_content
 
 
+# add system prompt to data, the model can learn how to response to user's questions
+# with the system prompt, or without the system prompt.
+# it is part of generalization ability of the model.
 def pre_processing_chat(conversations, add_system_ratio=0.2):
-    # tool use 数据完整保留不做处理
+    # data with tool use original data
     if any(conv.get("tools") for conv in conversations):
         return conversations
 
     SYSTEM_PROMPTS = [
-        "你是一个知识丰富的AI，尽力为用户提供准确的信息。",
-        "你是minimind，一个小巧但有用的语言模型。",
-        "你是一个专业的AI助手，请提供有价值的回答。",
-        "你是minimind，请尽力帮助用户解决问题。",
-        "你是一个可靠的AI，请给出准确的回答。",
         "You are a helpful AI assistant.",
         "You are minimind, a lightweight intelligent assistant.",
         "You are a friendly chatbot. Please answer the user's questions carefully.",
         "You are a knowledgeable AI. Try your best to provide accurate information.",
         "You are minimind, a small but useful language model.",
     ]
-    # 概率性添加system
+    # add system prompt with probability
     if conversations[0].get("role") != "system":
         if random.random() < add_system_ratio:
             return [
@@ -153,6 +151,7 @@ class SFTDataset(Dataset):
                 }
             ]
         })
+        # load dataset with format defined with features
         self.samples = load_dataset(
             "json", data_files=jsonl_path, split="train", features=features
         )
@@ -198,6 +197,9 @@ class SFTDataset(Dataset):
             )
             tokens = self.tokenizer(msg_text, add_special_tokens=False).input_ids
             all_input_ids.extend(tokens)
+            # SFT just want the model to learn how to response to user's questions from assistant's perspective.
+            # so we only need to label the assistant's response.
+            # the data like user's question, we don't need to learn. it is the input and set by user.
             if role == "assistant":
                 all_labels.extend(tokens)
             else:
@@ -226,10 +228,13 @@ class SFTDataset(Dataset):
 
 
 def main():
+    import torch.nn as nn
+
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     dataset_path = "data/train.jsonl"
     dataset = PretrainDataset(dataset_path, tokenizer)
     dataloader = PretrainDataLoader(dataset, batch_size=16, num_workers=0)
+
     embed = nn.Embedding(tokenizer.vocab_size, 1024)
     index = 0
     for batch in dataloader:

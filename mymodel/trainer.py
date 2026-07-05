@@ -2,8 +2,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from config import LLMTrainingConfig, get_config
+from jaxtyping import Float
 from loader import PretrainDataLoader, PretrainDataset, setup_seed
 from model import TransformerLM, save_model_safe
+from torch import Tensor
 from torch.optim import AdamW
 from transformers import AutoTokenizer
 
@@ -45,10 +47,10 @@ class Trainer:
             labels = labels.to(self.device, non_blocking=True)
 
             self.optimizer.zero_grad(set_to_none=True)
-            logits = self.model(input_ids)
+            logits: Float[Tensor, "batch seq vocab_size"] = self.model(input_ids)
             shift_logits = logits[:, :-1, :].contiguous()
             shift_labels = labels[:, 1:].contiguous()
-            loss = self.loss_fn(
+            loss: Float[Tensor, ""] = self.loss_fn(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
             )
