@@ -2,7 +2,7 @@
 source .venv/bin/activate
 source .env
 echo "HF_TOKEN: $HF_TOKEN"
-uv run train_lora.py \
+uv run scripts/train_lora.py \
   --model_name gpt2 \
   --dataset_path data/sample_data.jsonl \
   --output_dir ./lora_model \
