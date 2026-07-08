@@ -45,6 +45,7 @@ class LLMTrainingConfig(PretrainedConfig):
         moe_num: int = 4,
         top_k: int = 1,
         dropout: float = 0.1,
+        device: str = "cuda",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -68,6 +69,7 @@ class LLMTrainingConfig(PretrainedConfig):
         self.moe_num = moe_num
         self.top_k = top_k
         self.dropout = dropout
+        self.device = device
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,15 +91,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer_name", type=str, default="bert-base-chinese")
     parser.add_argument("--use_moe", type=bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--teacher_model", type=str, default="gpt2")
+    parser.add_argument("--distillation_alpha", type=float, default=0.1)
     return parser.parse_args()
 
 
 def get_config() -> LLMTrainingConfig:
     args = parse_args()
-
-    print("args: ", args)
-
-    print("args: ", args.use_moe)
     return LLMTrainingConfig(**vars(args))
 
 

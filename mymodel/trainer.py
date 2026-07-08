@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from config import LLMTrainingConfig, get_config
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from loader import PretrainDataLoader, PretrainDataset, setup_seed
 from model import TransformerLM, save_model_safe
 from torch import Tensor
@@ -33,32 +33,49 @@ class Trainer:
         step = 0
         data_iter = iter(self.dataloader)
 
-        # while step < 2:
         while step < self.config.max_steps:
             try:
                 batch = next(data_iter)
             except StopIteration:
+                # reset the data iterator, train from scratch again
+                print("No enough data for training, resetting data iterator")
                 data_iter = iter(self.dataloader)
                 batch = next(data_iter)
 
             step += 1
+            # batch read from local file system, it should be in CPU now
             input_ids, labels = batch
+            # non_blocking=True is used to avoid blocking the main thread
+            # when copy data from CPU to GPU
             input_ids = input_ids.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
 
             self.optimizer.zero_grad(set_to_none=True)
+
             logits: Float[Tensor, "batch seq vocab_size"] = self.model(input_ids)
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
+            shift_logits: Float[Tensor, "batch seq-1 vocab_size"] = logits[
+                :, :-1, :
+            ].contiguous()
+            shift_labels: Int[Tensor, "batch seq-1"] = labels[:, 1:].contiguous()
+
             loss: Float[Tensor, ""] = self.loss_fn(
+                # to two dimension, keep last dimension and flatten the rest
                 shift_logits.view(-1, shift_logits.size(-1)),
+                # to one dimension
                 shift_labels.view(-1),
             )
+
+            # check for exceptional values
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss at step {step}")
 
+            # backpropagation
             loss.backward()
+
+            # clip the gradient to avoid exploding gradients
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            # update the model parameters
             self.optimizer.step()
 
             loss_value = loss.item()
@@ -81,12 +98,6 @@ class Trainer:
 def main() -> None:
     setup_seed(42)
     config = get_config()
-
-    print("config: ", config.use_moe)
-
-    if config.use_moe:
-        print("Warning: use_moe is not implemented yet; training dense FFN.")
-
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     config.vocab_size = tokenizer.vocab_size
 
@@ -109,6 +120,8 @@ def main() -> None:
         "approx logits memory (MB): "
         f"{config.batch_size * config.context_length * config.vocab_size * 4 / 1e6:.1f}"
     )
+    model = torch.compile(model)
+    model = model.to(config.device)
 
     trainer = Trainer(model, dataloader, config)
     trainer.train()

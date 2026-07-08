@@ -75,7 +75,10 @@ import os
 
 import torch
 import torch.nn as nn
-from config import BlockConfig, LLMTrainingConfig, TransformerModelConfig
+try:
+    from config import BlockConfig, LLMTrainingConfig, TransformerModelConfig
+except ImportError:
+    from mymodel.config import BlockConfig, LLMTrainingConfig, TransformerModelConfig
 from jaxtyping import Bool, Float, Int, jaxtyped
 from safetensors.torch import load_file, save_file
 from torch import Tensor

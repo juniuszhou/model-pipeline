@@ -35,7 +35,6 @@ class Trainer:
         step = 0
         data_iter = iter(self.dataloader)
 
-        # while step < 2:
         while step < self.config.max_steps:
             try:
                 batch = next(data_iter)
@@ -105,7 +104,9 @@ def main() -> None:
 
     # load the model from the latest saved by run train.py
     model = load_model_safe("latest")
+    model = model.to(config.device)
     apply_lora(model)
+    model = torch.compile(model)
 
     param_count = sum(p.numel() for p in model.parameters())
     print(f"total parameters: {param_count:,}")
@@ -116,7 +117,7 @@ def main() -> None:
 
     trainer = Trainer(model, dataloader, config)
     trainer.train()
-    save_lora(model, "lora.pth")
+    save_lora(model, "models/lora.pth")
 
 
 if __name__ == "__main__":

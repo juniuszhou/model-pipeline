@@ -69,6 +69,8 @@ class PretrainDataset(Dataset):
     ):
         super().__init__()
         self.tokenizer = tokenizer
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
         self.max_length = max_length
         self.samples = load_dataset("json", data_files=data_path, split="train")
@@ -227,24 +229,74 @@ class SFTDataset(Dataset):
         )
 
 
+class RLAIFDataset(Dataset):
+    """Data format:
+    {"conversations": [
+    {"role": "user", "content": "一个探险队在丛林中发现一座古老石门，门上刻有以下谜语：。"},
+    {"role": "assistant", "content": "我猜到了！"},
+    {"role": "user", "content": "你今天吃了吗？"},
+    {"role": "assistant", "content": "今天没吃，但很饿！"},
+    {"role": "user", "content": "你今天在干嘛？"},
+    {"role": "assistant", "content": ""}
+    ]}
+    """
+
+    def __init__(self, jsonl_path, tokenizer, max_length=1024, thinking_ratio=0.5):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        # PPO mostly for complicated tasks, so we need to open the thinking.
+        self.thinking_ratio = thinking_ratio
+        self.samples = load_dataset("json", data_files=jsonl_path, split="train")
+
+        # text begin with bos_token and assistant
+        self.bos_id = tokenizer(
+            f"{tokenizer.bos_token}assistant", add_special_tokens=False
+        ).input_ids
+        self.eos_id = tokenizer(
+            f"{tokenizer.eos_token}", add_special_tokens=False
+        ).input_ids
+
+    def __len__(self):
+        return len(self.samples)
+
+    def create_chat_prompt(self, conversations):
+        # add system prompt to data, the model can learn how to response to user's questions
+        conversations = pre_processing_chat(conversations)
+        use_thinking = random.random() < self.thinking_ratio
+        return self.tokenizer.apply_chat_template(
+            conversations[:-1],
+            tokenize=False,
+            open_thinking=use_thinking,
+            add_generation_prompt=True,
+        )
+
+    def __getitem__(self, index):
+        sample = self.samples[index]
+        prompt = self.create_chat_prompt(sample["conversations"])
+
+        return {"prompt": prompt, "answer": ""}
+
+
 def main():
-    import torch.nn as nn
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     dataset_path = "data/train.jsonl"
     dataset = PretrainDataset(dataset_path, tokenizer)
-    dataloader = PretrainDataLoader(dataset, batch_size=16, num_workers=0)
+    print("dataset: ", dataset[0])
 
-    embed = nn.Embedding(tokenizer.vocab_size, 1024)
-    index = 0
-    for batch in dataloader:
-        input_ids, labels = batch
-        x = embed(input_ids)
-        print("x: ", x.shape)
-        index += 1
-        if index > 10:
-            break
+    # dataloader = PretrainDataLoader(dataset, batch_size=16, num_workers=0)
+
+    # embed = nn.Embedding(tokenizer.vocab_size, 1024)
+    # index = 0
+    # for batch in dataloader:
+    #     input_ids, labels = batch
+    #     x = embed(input_ids)
+    #     print("x: ", x.shape)
+    #     index += 1
+    #     if index > 10:
+    #         break
 
 
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
