@@ -9,12 +9,15 @@ dependencies = [
     "datasets>=2.10.0",
     "dotenv>=0.9.9",
     "jaxtyping>=0.3.11",
+    "logging>=0.4.9.6",
+    "modelscope>=1.38.0",
     "numpy>=1.24.0",
     "peft>=0.5.0",
+    "pytest>=9.1.1",
     "python-dotenv>=1.0.0",
     "scikit-learn>=1.3.0",
     "torch>=2.0.0",
-    "transformers>=4.30.0",
+    "transformers>=5.8.1",
     "trl>=0.7.0",
 ]
 
@@ -24,6 +27,7 @@ preview = true
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests", "mymodel/tests"]
+addopts = ["--log-cli-level=WARNING", "-s"]
 
 [tool.ruff.lint]
 ignore = ["F722", "F821"]
