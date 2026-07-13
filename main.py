@@ -1,10 +1,6 @@
-import torch
+from torch import Tensor
 
-x = torch.arange(24).reshape(6, 4).float()
-print(x.shape)
-
-print(x.unsqueeze(-1).shape)
-
-# y = torch.tensor([[True, False, True], [False, True, False]])
-
-# print(x[y])
+if __name__ == "__main__":
+    a = Tensor([[1, 2, 3], [4, 5, 6]])
+    b = a.min()
+    print(b.shape)
