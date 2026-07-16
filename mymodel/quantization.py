@@ -136,7 +136,7 @@ def dequantize(
     x_q: Int[Tensor, "..."] | torch.Tensor,
     scale: Float[Tensor, "..."] | torch.Tensor,
     zero_point: torch.Tensor | None = None,
-) -> torch.Tensor:
+) -> Float[Tensor, "..."]:
     """Dequantize integer tensor back to float.
 
     x_hat = (x_q - z) * s
@@ -279,9 +279,7 @@ class FakeQuantizedLinear(nn.Module):
         # Fake-quantize weights (symmetric → zp = 0 on same device as weight).
         w_scale = symmetric_scale(self.weight, self.q_max)
         zero = torch.zeros((), device=self.weight.device, dtype=self.weight.dtype)
-        w_q = FakeQuantize.apply(
-            self.weight, w_scale, zero, self.q_min, self.q_max
-        )
+        w_q = FakeQuantize.apply(self.weight, w_scale, zero, self.q_min, self.q_max)
 
         # Fake-quantize activations (asymmetric, per-tensor).
         a_scale, a_z = asymmetric_scale_and_z(x, self.q_min, self.q_max)
@@ -373,9 +371,7 @@ def demo_quantization():
     x_q_a = quantize_asymmetric(x, s_a, z_a)
     x_dq_a = dequantize(x_q_a, s_a, z_a)
     mae_a = (x - x_dq_a).abs().mean()
-    print(
-        f"Asymmetric  | scale={s_a.item():.6f}, zp={z_a.item():.0f}, MAE={mae_a:.6f}"
-    )
+    print(f"Asymmetric  | scale={s_a.item():.6f}, zp={z_a.item():.0f}, MAE={mae_a:.6f}")
 
     # --- symmetric ---
     s_s = symmetric_scale(x)
